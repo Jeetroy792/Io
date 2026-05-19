@@ -17,38 +17,6 @@ interface ChatAreaProps {
   isMobile: boolean;
 }
 
-const MOCK_AI_RESPONSE = `Here's a breakdown of React Server Components:
-
-**Key differences:**
-
-- **Server Components** run only on the server, have direct access to backend resources, and cannot use hooks or browser APIs.
-- **Client Components** (marked with \`'use client'\`) run in the browser, can use state, effects, and event listeners.
-
-Here's a quick example of a Server Component:
-
-\`\`\`tsx
-// This runs on the server only
-async function UserProfile({ id }: { id: string }) {
-  const user = await db.users.findById(id);
-  return <div>{user.name}</div>;
-}
-\`\`\`
-
-And a Client Component:
-
-\`\`\`tsx
-'use client';
-
-import { useState } from 'react';
-
-export function Counter() {
-  const [count, setCount] = useState(0);
-  return <button onClick={() => setCount(c => c + 1)}>{count}</button>;
-}
-\`\`\`
-
-The mental model shift is that you now choose *where* each component lives, optimizing for both performance and interactivity.`;
-
 export default function ChatArea({
   selectedModel,
   onModelSelect,
@@ -62,7 +30,6 @@ export default function ChatArea({
   const [isThinking, setIsThinking] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const hasMessages = messages.length > 0;
@@ -91,14 +58,24 @@ export default function ChatArea({
     }
   };
 
-  const simulateAIResponse = useCallback((userMsgId: string) => {
+  // 🚀 রিয়েল লাইভ এপিআই রেসপন্স হ্যান্ডলার
+  const fetchLiveAIResponse = useCallback(async (userText: string) => {
     setIsThinking(true);
-
     const aiMsgId = crypto.randomUUID();
-    const fullText = MOCK_AI_RESPONSE;
 
-    setTimeout(() => {
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userText, modelId: selectedModel }),
+      });
+
+      if (!res.ok) throw new Error("Failed to contact backend API");
+
+      const data = await res.json();
       setIsThinking(false);
+      
+      // চ্যাটজিপিটির মতো স্ট্রিমিং এফেক্ট তৈরি করা
       setStreamingId(aiMsgId);
       setMessages((prev) => [
         ...prev,
@@ -106,31 +83,36 @@ export default function ChatArea({
       ]);
 
       let charIndex = 0;
-      const chunkSize = 3;
+      const fullText = data.content;
+      const chunkSize = 4;
+      
       const interval = setInterval(() => {
         charIndex += chunkSize;
         if (charIndex >= fullText.length) {
           clearInterval(interval);
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === aiMsgId
-                ? { ...m, content: fullText, isStreaming: false }
-                : m
+              m.id === aiMsgId ? { ...m, content: fullText, isStreaming: false } : m
             )
           );
           setStreamingId(null);
         } else {
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === aiMsgId
-                ? { ...m, content: fullText.slice(0, charIndex) }
-                : m
+              m.id === aiMsgId ? { ...m, content: fullText.slice(0, charIndex) } : m
             )
           );
         }
-      }, 15);
-    }, 1500);
-  }, []);
+      }, 10);
+
+    } catch (error) {
+      setIsThinking(false);
+      setMessages((prev) => [
+        ...prev,
+        { id: aiMsgId, role: 'assistant', content: "⚠️ Error: Connection failed. Please check your API tokens." },
+      ]);
+    }
+  }, [selectedModel]);
 
   const handleSend = () => {
     const text = input.trim();
@@ -148,7 +130,7 @@ export default function ChatArea({
       textareaRef.current.style.height = 'auto';
     }
 
-    simulateAIResponse(userMsg.id);
+    fetchLiveAIResponse(text);
   };
 
   const handlePromptClick = (prompt: string) => {
@@ -159,22 +141,18 @@ export default function ChatArea({
       content: prompt,
     };
     setMessages((prev) => [...prev, userMsg]);
-    simulateAIResponse(userMsg.id);
+    fetchLiveAIResponse(prompt);
   };
 
   const handleLike = (id: string) => {
     setMessages((prev) =>
-      prev.map((m) =>
-        m.id === id ? { ...m, liked: m.liked ? null : true, disliked: null } : m
-      )
+      prev.map((m) => (m.id === id ? { ...m, liked: m.liked ? null : true, disliked: null } : m))
     );
   };
 
   const handleDislike = (id: string) => {
     setMessages((prev) =>
-      prev.map((m) =>
-        m.id === id ? { ...m, disliked: m.disliked ? null : true, liked: null } : m
-      )
+      prev.map((m) => (m.id === id ? { ...m, disliked: m.disliked ? null : true, liked: null } : m))
     );
   };
 
@@ -183,7 +161,7 @@ export default function ChatArea({
     setMessages((prev) => prev.filter((m) => m.id !== id));
     const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
     if (lastUserMsg) {
-      simulateAIResponse(lastUserMsg.id);
+      fetchLiveAIResponse(lastUserMsg.content);
     }
   };
 
@@ -192,17 +170,15 @@ export default function ChatArea({
     if (msg && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(msg.content.replace(/```[\s\S]*?```/g, '').replace(/\*\*/g, ''));
-      utterance.rate = 1;
-      utterance.pitch = 1;
       window.speechSynthesis.speak(utterance);
     }
   };
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 relative">
+    <div className="flex flex-col flex-1 min-h-0 relative bg-[#0D0D0D]">
       {/* Header */}
       {isMobile ? (
-        <header className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08] flex-shrink-0">
+        <header className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08] flex-shrink-0 bg-[#0D0D0D]">
           <button
             onClick={onMobileMenuOpen}
             className="p-2 rounded-lg text-[#8e8ea0] hover:text-white hover:bg-white/10 transition-all"
@@ -216,7 +192,7 @@ export default function ChatArea({
           </button>
           <div className="flex items-center gap-1.5">
             <Sparkles size={18} strokeWidth={1.75} className="text-sky-400" />
-            <span className="text-white font-semibold text-base tracking-tight">ChatGPT</span>
+            <span className="text-white font-semibold text-base tracking-tight">ChatGPT Pro</span>
           </div>
           <div className="w-9" />
         </header>
@@ -231,7 +207,7 @@ export default function ChatArea({
 
       {/* Body */}
       {hasMessages || isThinking ? (
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 pb-4 scrollbar-thin">
+        <div className="flex-1 overflow-y-auto px-4 pb-4 scrollbar-thin">
           <div className="max-w-2xl mx-auto w-full pt-4 space-y-5">
             {messages.map((msg) => (
               <MessageBubble
@@ -257,7 +233,7 @@ export default function ChatArea({
       )}
 
       {/* Input bar */}
-      <div className="flex-shrink-0 px-4 pb-4 pt-2">
+      <div className="flex-shrink-0 px-4 pb-4 pt-2 bg-[#0D0D0D]">
         <div className="max-w-2xl mx-auto">
           <InputBar
             input={input}
@@ -313,9 +289,7 @@ function InputBar({ input, textareaRef, onInput, onKeyDown, onSend, disabled }: 
         <button
           onClick={onSend}
           className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200 ${
-            canSend
-              ? 'bg-white text-[#0d0d0d] hover:bg-white/90 shadow-md'
-              : 'bg-white/10 text-[#8e8ea0] cursor-not-allowed'
+            canSend ? 'bg-white text-[#0d0d0d] hover:bg-white/90 shadow-md' : 'bg-white/10 text-[#8e8ea0] cursor-not-allowed'
           }`}
           disabled={!canSend}
         >
